@@ -1,4 +1,5 @@
 # suggest_model.py — GPT-2 Next Command Predictor
+# Fine-tuned on 130,606 real bash command sequences from 589 users
 
 import torch
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
@@ -7,6 +8,7 @@ from transformers import GPT2Tokenizer, GPT2LMHeadModel
 MODEL_PATH = "./models/gpt2_bash_next_model"
 
 tokenizer = GPT2Tokenizer.from_pretrained(MODEL_PATH)
+tokenizer.add_special_tokens({"sep_token": "<CMD>"})
 tokenizer.pad_token = tokenizer.eos_token
 
 model  = GPT2LMHeadModel.from_pretrained(MODEL_PATH)
@@ -21,7 +23,8 @@ MAX_HISTORY = 3
 
 def predict_next(command: str) -> str:
     """
-    Takes current command, returns predicted next command as string.
+    Takes current command + recent history,
+    returns predicted next command as string.
     Automatically tracks history of last 3 commands.
     """
     global _history
@@ -44,13 +47,13 @@ def predict_next(command: str) -> str:
         with torch.no_grad():
             outputs = model.generate(
                 inputs["input_ids"],
-                attention_mask=inputs["attention_mask"],  # ← fixes warning
+                attention_mask=inputs["attention_mask"],
                 max_new_tokens=15,
                 num_return_sequences=1,
                 do_sample=True,
                 temperature=0.7,
                 top_p=0.9,
-                pad_token_id=tokenizer.eos_token_id,
+                pad_token_id=tokenizer.pad_token_id,
             )
 
         full_text = tokenizer.decode(outputs[0], skip_special_tokens=False)
@@ -59,16 +62,16 @@ def predict_next(command: str) -> str:
         next_cmd  = next_cmd.split("\n")[0].strip()
 
         if not _is_good_suggestion(next_cmd, command):
-            return _fallback(command)
+            return ""
 
         return next_cmd
 
     except Exception:
-        return _fallback(command)
+        return ""
 
 
 def reset_history():
-    """Call this to clear history on new session."""
+    """Clear command history — call on new session."""
     global _history
     _history = []
 
@@ -81,28 +84,7 @@ def _is_good_suggestion(suggestion: str, current_command: str) -> bool:
         return False
     if suggestion.strip() == current_command.strip():
         return False
-    if len(suggestion.split()) == 1 and len(suggestion) < 4:
-        return False
     return True
-
-
-def _fallback(command: str) -> str:
-    """Rule-based fallback if model fails."""
-    cmd = command.strip().lower().split()[0] if command.strip() else ""
-    fallbacks = {
-        "git"    : "git status",
-        "cd"     : "ls -la",
-        "ls"     : "cd ",
-        "mkdir"  : "cd ",
-        "python" : "pip install -r requirements.txt",
-        "pip"    : "python script.py",
-        "docker" : "docker ps -a",
-        "make"   : "./output",
-        "vim"    : "cat ",
-        "cat"    : "grep '' ",
-        "sudo"   : "sudo systemctl status",
-    }
-    return fallbacks.get(cmd, "ls -la")
 
 
 # ── Test ──────────────────────────────────────────────────────────────────────
@@ -127,5 +109,5 @@ if __name__ == "__main__":
         suggestion = predict_next(sequence[-1])
         context    = " → ".join(sequence)
         print(f"Input  : {context}")
-        print(f"Suggest: {suggestion}")
+        print(f"Suggest: {suggestion if suggestion else '(no suggestion)'}")
         print()
